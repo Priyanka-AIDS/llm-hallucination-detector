@@ -1,0 +1,15 @@
+gradio
+pandas
+fastapi
+pydantic
+slowapi
+uvicorn
+torch
+sentence-transformers
+transformers
+faiss-cpu
+numpy
+scikit-learn
+matplotlib
+seaborn
+requests

@@ -1,0 +1,23 @@
+name: ruc-detect
+channels:
+  - pytorch
+  - defaults
+dependencies:
+  - python=3.10
+  - pytorch
+  - cpuonly
+  - pip
+  - pip:
+    - gradio
+    - pandas
+    - fastapi
+    - pydantic
+    - slowapi
+    - uvicorn
+    - sentence-transformers
+    - transformers
+    - faiss-cpu
+    - numpy
+    - scikit-learn
+    - matplotlib
+    - seaborn
