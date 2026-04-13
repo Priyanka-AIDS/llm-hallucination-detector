@@ -2,12 +2,14 @@ from sentence_transformers import SentenceTransformer
 import numpy as np
 import faiss
 import pickle
+import spacy
 
 from utils.nli import get_nli_score
 from utils.selfcheck import selfcheck_nli
 from utils.taxonomy import classify_pattern
 
 model = SentenceTransformer("all-MiniLM-L6-v2")
+nlp = spacy.load("en_core_web_sm")
 
 index = faiss.read_index("models/faiss.index")
 
@@ -19,32 +21,35 @@ def cosine_similarity(a, b):
 
 def run_pipeline(prompt, response, sampled_responses=None):
 
-    response_embedding = model.encode([response])
+    response_embedding = model.encode([response]).astype("float32")
     response_embedding = response_embedding / np.linalg.norm(
         response_embedding, axis=1, keepdims=True
     )
 
-    D, I = index.search(np.array(response_embedding), k=5)
+    D, I = index.search(response_embedding, k=5)
 
-    similarities = []
     top_docs = I[0]
 
-    for idx in top_docs:
-        doc_emb = index.reconstruct(int(idx))
-        sim = cosine_similarity(response_embedding[0], doc_emb)
-        similarities.append(sim)
+    retrieved_docs_text = [documents[idx] for idx in top_docs]
+    doc_embeddings = model.encode(retrieved_docs_text).astype("float32")
+    doc_embeddings = doc_embeddings / np.linalg.norm(doc_embeddings, axis=1, keepdims=True)
 
-    avg_sim = sum(similarities) / len(similarities)
+    similarities = [
+        float(cosine_similarity(response_embedding[0], doc_embeddings[i]))
+        for i in range(len(doc_embeddings))
+    ]
+
+    avg_sim = float(np.mean(similarities))
     uncertainty = float(np.var(similarities))
+
+    # ================= Claim Extraction =================
+    doc = nlp(response)
+    sentences = [sent.text.strip() for sent in doc.sents if sent.text.strip()]
 
     # ================= NLI (FactCC idea) =================
     nli_scores = []
 
-    for sent in response.split("."):
-        sent = sent.strip()
-        if not sent:
-            continue
-
+    for sent in sentences:
         for idx in top_docs:
             label, score = get_nli_score(documents[idx], sent)
 
@@ -53,7 +58,7 @@ def run_pipeline(prompt, response, sampled_responses=None):
             elif label == "CONTRADICTION":
                 nli_scores.append(0)
 
-    nli_score = sum(nli_scores)/len(nli_scores) if nli_scores else 0
+    nli_score = float(np.mean(nli_scores)) if nli_scores else 0.0
 
     # ================= SelfCheckGPT =================
     selfcheck_score = 0.0
@@ -72,7 +77,7 @@ def run_pipeline(prompt, response, sampled_responses=None):
         0.3 * selfcheck_score
     )
 
-    label = final_score > 0.6
+    label = final_score > 0.52
 
     # ================= Taxonomy =================
     pattern, explanation = classify_pattern(avg_sim, nli_score, final_score)
@@ -80,23 +85,23 @@ def run_pipeline(prompt, response, sampled_responses=None):
     # ================= Span Detection =================
     flagged_spans = []
 
-    sentences = response.split(".")
     for sent in sentences:
-        sent = sent.strip()
-        if not sent:
-            continue
-
-        emb = model.encode([sent])
+        emb = model.encode([sent]).astype("float32")
         emb = emb / np.linalg.norm(emb, axis=1, keepdims=True)
 
-        D, I = index.search(np.array(emb), k=3)
+        D, I_span = index.search(emb, k=3)
+        span_top_docs = I_span[0]
 
-        sims = []
-        for idx in I[0]:
-            doc_emb = index.reconstruct(int(idx))
-            sims.append(cosine_similarity(emb[0], doc_emb))
+        span_retrieved_docs = [documents[idx] for idx in span_top_docs]
+        span_doc_embeddings = model.encode(span_retrieved_docs).astype("float32")
+        span_doc_embeddings = span_doc_embeddings / np.linalg.norm(span_doc_embeddings, axis=1, keepdims=True)
 
-        avg = sum(sims) / len(sims)
+        sims = [
+            float(cosine_similarity(emb[0], span_doc_embeddings[i]))
+            for i in range(len(span_doc_embeddings))
+        ]
+
+        avg = float(np.mean(sims)) if sims else 0.0
 
         if avg < 0.5:
             start = response.find(sent)
